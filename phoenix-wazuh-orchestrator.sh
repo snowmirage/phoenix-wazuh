@@ -506,24 +506,24 @@ echo "✅ Configuration file generated successfully"
 echo ""
 echo "🔄 Step 4.3: Restart Manager to Apply Configuration..."
 
-# Stop container using docker-compose (avoids restart:always auto-restart issue)
-echo "Stopping manager container..."
-ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && docker-compose stop wazuh.manager" >/dev/null 2>&1
-
-# Copy config to wazuh_etc volume while container is stopped
+# Copy config to wazuh_etc volume using a temporary container
 echo "Copying configuration to wazuh_etc volume..."
 ssh -i $SSH_KEY root@$UNRAID_SERVER "docker run --rm -v wazuh_wazuh_etc:/dest -v $UNRAID_NVME_PATH/config/wazuh_cluster:/src alpine sh -c 'cp /src/wazuh_manager.conf /dest/ossec.conf && chmod 660 /dest/ossec.conf && chown 999:999 /dest/ossec.conf'"
 
-# Start container with docker-compose to apply new configuration
-echo "Starting manager with new configuration..."
-ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && WAZUH_VERSION='$WAZUH_VERSION' docker-compose start wazuh.manager" >/dev/null 2>&1
+# Use full container recreation (docker rm -f + up -d) to avoid OCI runtime errors
+# docker-compose stop/start can leave containers in inconsistent state on Unraid
+echo "Recreating manager container with new configuration..."
+ssh -i $SSH_KEY root@$UNRAID_SERVER "docker rm -f wazuh-wazuh.manager-1" >/dev/null 2>&1
+ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && WAZUH_VERSION='$WAZUH_VERSION' docker-compose up -d wazuh.manager" >/dev/null 2>&1
 echo "⏳ Waiting for container to initialize with new configuration..."
 sleep 30
 
 # Wait for manager API to be ready
+# Use single quotes around password to avoid shell expansion of special characters
 MANAGER_READY=false
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    if ssh -i $SSH_KEY root@$UNRAID_SERVER "curl -k -s --max-time 5 -u wazuh-wui:MyS3cr37P450r.*- https://$MANAGER_IP:55000/ 2>/dev/null | grep -q 'title\\|Unauthorized'"; then
+    API_RESPONSE=$(ssh -i $SSH_KEY root@$UNRAID_SERVER "curl -k -s --max-time 5 'https://$MANAGER_IP:55000/' 2>/dev/null" || echo "")
+    if echo "$API_RESPONSE" | grep -q 'title\|Unauthorized\|data'; then
         echo "   ✅ Manager fully initialized (attempt $attempt)"
         MANAGER_READY=true
         break
@@ -554,8 +554,10 @@ echo "Configuring indexer authentication for vulnerability detection..."
 ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && docker exec wazuh-wazuh.manager-1 /var/ossec/bin/wazuh-keystore -f indexer -k username -v admin 2>/dev/null" || true
 ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && docker exec wazuh-wazuh.manager-1 /var/ossec/bin/wazuh-keystore -f indexer -k password -v SecretPassword 2>/dev/null" || true
 
-echo "Restarting manager to apply all configuration changes..."
-ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && docker-compose restart wazuh.manager" >/dev/null 2>&1
+echo "Recreating manager to apply all configuration changes..."
+# Use full container recreation to avoid OCI runtime errors
+ssh -i $SSH_KEY root@$UNRAID_SERVER "docker rm -f wazuh-wazuh.manager-1" >/dev/null 2>&1
+ssh -i $SSH_KEY root@$UNRAID_SERVER "cd $UNRAID_NVME_PATH && WAZUH_VERSION='$WAZUH_VERSION' docker-compose up -d wazuh.manager" >/dev/null 2>&1
 echo "⏳ Waiting for container to initialize..."
 sleep 30
 
@@ -628,8 +630,8 @@ echo "Creating User Scripts auto-start configuration..."
 # Create the auto-start script directory
 ssh -i $SSH_KEY root@$UNRAID_SERVER "mkdir -p /boot/config/plugins/user.scripts/scripts/wazuh-autostart"
 
-# Create the auto-start script
-ssh -i $SSH_KEY root@$UNRAID_SERVER "cat > /boot/config/plugins/user.scripts/scripts/wazuh-autostart/script << 'EOF'
+# Create the auto-start script with version variable
+ssh -i $SSH_KEY root@$UNRAID_SERVER "cat > /boot/config/plugins/user.scripts/scripts/wazuh-autostart/script << EOF
 #!/bin/bash
 # Wazuh SIEM Auto-start Script
 # Starts Wazuh containers on Unraid boot
@@ -637,7 +639,8 @@ ssh -i $SSH_KEY root@$UNRAID_SERVER "cat > /boot/config/plugins/user.scripts/scr
 # Wait for Docker and networks to be ready
 sleep 60
 
-# Start Wazuh containers
+# Set Wazuh version and start containers
+export WAZUH_VERSION='$WAZUH_VERSION'
 cd /mnt/user/appdata/wazuh
 /usr/local/bin/docker-compose up -d
 

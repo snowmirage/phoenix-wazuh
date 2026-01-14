@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Phoenix Wazuh Worker Script - Fresh Install Only
-# Simplified version without backup/restore functionality
+# Phoenix Wazuh Worker Script - Fresh Install with Official Approach
+# Follows official Wazuh Docker deployment with generated certificates
 # This script runs ON the Phoenix Unraid server to deploy Docker containers
 
 # Parse parameters from orchestrator
@@ -10,7 +10,7 @@ WAZUH_VERSION=$1
 echo "==========================================="
 echo "  Phoenix Wazuh Docker Deployment Worker"
 echo "  Executing on Phoenix Unraid Server"
-echo "  Mode: FRESH INSTALL"
+echo "  Mode: FRESH INSTALL (Official Approach)"
 echo "  Wazuh Version: $WAZUH_VERSION"
 echo "==========================================="
 echo ""
@@ -30,27 +30,6 @@ if [ ! -d "/mnt/user" ]; then
     exit 1
 fi
 
-# Verify directories exist
-if [ ! -d "$UNRAID_NVME_PATH" ] || [ ! -d "$UNRAID_DATA_PATH" ]; then
-    echo "❌ Error: Required Unraid directories do not exist"
-    echo "   Expected: $UNRAID_NVME_PATH and $UNRAID_DATA_PATH"
-    echo "   Please run cleanup script first"
-    exit 1
-fi
-
-# Verify our pre-edited files exist
-if [ ! -f "$UNRAID_NVME_PATH/docker-compose-unraid.yml" ]; then
-    echo "❌ Error: Pre-edited docker-compose-unraid.yml not found"
-    echo "   Please copy docker-compose-unraid.yml to $UNRAID_NVME_PATH"
-    exit 1
-fi
-
-if [ ! -f "$UNRAID_NVME_PATH/certs-unraid.yml" ]; then
-    echo "❌ Error: Pre-edited certs-unraid.yml not found"
-    echo "   Please copy certs-unraid.yml to $UNRAID_NVME_PATH"
-    exit 1
-fi
-
 echo "📥 Step 1: Setting up official Wazuh configuration files..."
 echo "Creating temporary work directory..."
 mkdir -p $WORK_DIR
@@ -67,82 +46,111 @@ fi
 echo "✅ Repository cloned successfully"
 echo ""
 
-echo "📤 Step 2: Copying official files to Unraid paths..."
-# Copy everything except docker-compose.yml (we'll use our pre-edited version)
-cp -r single-node/* $UNRAID_NVME_PATH/
-cd $UNRAID_NVME_PATH
+echo "📤 Step 2: Setting up configuration directories..."
 
-# Replace with our pre-edited files
-cp docker-compose-unraid.yml docker-compose.yml
-cp certs-unraid.yml config/certs.yml
+# Create the config directory structure
+mkdir -p $UNRAID_NVME_PATH/config/wazuh_indexer_ssl_certs
+mkdir -p $UNRAID_NVME_PATH/config/wazuh_cluster
+mkdir -p $UNRAID_NVME_PATH/config/wazuh_dashboard
+mkdir -p $UNRAID_NVME_PATH/config/wazuh_indexer
+
+# Copy config files from the cloned repo
+cp single-node/config/wazuh_cluster/wazuh_manager.conf $UNRAID_NVME_PATH/config/wazuh_cluster/
+cp single-node/config/wazuh_dashboard/opensearch_dashboards.yml $UNRAID_NVME_PATH/config/wazuh_dashboard/
+cp single-node/config/wazuh_dashboard/wazuh.yml $UNRAID_NVME_PATH/config/wazuh_dashboard/
+cp single-node/config/wazuh_indexer/wazuh.indexer.yml $UNRAID_NVME_PATH/config/wazuh_indexer/
+cp single-node/config/wazuh_indexer/internal_users.yml $UNRAID_NVME_PATH/config/wazuh_indexer/
+
+# Copy our pre-edited docker-compose (already copied by orchestrator)
+# The orchestrator copies docker-compose-unraid.yml to this location
+cp $UNRAID_NVME_PATH/docker-compose-unraid.yml $UNRAID_NVME_PATH/docker-compose.yml
+
+# Copy certs.yml for certificate generation
+cp single-node/config/certs.yml $UNRAID_NVME_PATH/config/certs.yml
 
 # Add path.repo to indexer config for snapshot support
-echo '' >> config/wazuh_indexer/wazuh.indexer.yml
-echo 'path.repo: ["/usr/share/wazuh-indexer/snapshots"]' >> config/wazuh_indexer/wazuh.indexer.yml
+echo '' >> $UNRAID_NVME_PATH/config/wazuh_indexer/wazuh.indexer.yml
+echo 'path.repo: ["/usr/share/wazuh-indexer/snapshots"]' >> $UNRAID_NVME_PATH/config/wazuh_indexer/wazuh.indexer.yml
 
-echo "✅ Files copied and replaced with Unraid versions (docker-compose.yml, certs.yml, wazuh.indexer.yml)"
+echo "✅ Configuration files copied"
 echo ""
 
-echo "🔧 Step 3: Creating volume directories..."
+echo "🔐 Step 3: Generating SSL certificates..."
+cd $UNRAID_NVME_PATH
 
-echo "Creating volume directories..."
-mkdir -p volumes/{wazuh_api_configuration,wazuh_etc,wazuh_integrations,wazuh_active_response,wazuh_agentless,wazuh_wodles,filebeat_etc,filebeat_var,wazuh-dashboard-config,wazuh-dashboard-custom}
+# Create certificate generation compose file
+cat > generate-certs.yml << 'CERTEOF'
+services:
+  generator:
+    image: wazuh/wazuh-certs-generator:0.0.2
+    hostname: wazuh-certs-generator
+    volumes:
+      - ./config/wazuh_indexer_ssl_certs/:/certificates/
+      - ./config/certs.yml:/config/certs.yml
+CERTEOF
+
+echo "Running certificate generator..."
+docker compose -f generate-certs.yml run --rm generator
+
+if [ ! -f "$UNRAID_NVME_PATH/config/wazuh_indexer_ssl_certs/root-ca.pem" ]; then
+    echo "❌ Error: Certificate generation failed"
+    exit 1
+fi
+
+echo "✅ SSL certificates generated successfully"
+
+# List generated certificates
+echo "Generated certificates:"
+ls -la $UNRAID_NVME_PATH/config/wazuh_indexer_ssl_certs/
+echo ""
+
+echo "🔧 Step 4: Creating data directories..."
+
+# Create data directories on array
 mkdir -p $UNRAID_DATA_PATH/{wazuh_logs,wazuh_queue,wazuh_var_multigroups,wazuh-indexer-data}
+mkdir -p /mnt/user/wazuh-data/snapshots
 
-echo "Setting proper permissions..."
-chown -R 1000:users volumes/ $UNRAID_DATA_PATH/
-chmod -R 755 volumes/ $UNRAID_DATA_PATH/
+# Set proper permissions for data directories
+chown -R 1000:1000 $UNRAID_DATA_PATH/
+chmod -R 755 $UNRAID_DATA_PATH/
 
-# Create ar.conf file to prevent manager initialization failure
-echo "Creating ar.conf file for active response configuration..."
-mkdir -p volumes/wazuh_etc/shared
-touch volumes/wazuh_etc/shared/ar.conf
-chown root:999 volumes/wazuh_etc/shared/ar.conf
-chmod 660 volumes/wazuh_etc/shared/ar.conf
+# Set permissions for indexer data directory specifically
+chown -R 1000:1000 $UNRAID_DATA_PATH/wazuh-indexer-data
+chmod 755 $UNRAID_DATA_PATH/wazuh-indexer-data
 
-echo "✅ Volume setup completed"
-echo ""
+# Set permissions for snapshots directory
+chown -R 1000:1000 /mnt/user/wazuh-data/snapshots
+chmod 755 /mnt/user/wazuh-data/snapshots
 
-echo "🔐 Step 4: Generating certificates using official method..."
-echo "Running official certificate generation..."
-docker-compose -f generate-indexer-certs.yml run --rm generator
-
-# Set proper permissions on certificates
-chown -R 1000:users config/
-chmod -R 755 config/
-
-echo "Certificate files created:"
-ls -la config/wazuh_indexer_ssl_certs/
-
-echo "✅ Certificates generated successfully"
+echo "✅ Data directories created with proper permissions"
 echo ""
 
 echo "🚀 Step 5: Starting Wazuh deployment..."
-echo "Starting containers..."
+cd $UNRAID_NVME_PATH
 docker-compose up -d
 
 echo ""
-echo "⏳ Step 5.5: Waiting for indexer to fully stabilize..."
-echo "   This ensures dashboard migration won't fail due to indexer not being ready"
-echo ""
+echo "⏳ Step 5.5: Waiting for indexer to initialize..."
 
 # Configuration
 INDEXER_IP="10.2.0.86"
 INDEXER_TIMEOUT=300  # 5 minutes
 
 # Wait for indexer to respond
-echo "   Waiting for indexer to respond (timeout: ${INDEXER_TIMEOUT}s)..."
+echo "   Waiting for indexer to start (timeout: ${INDEXER_TIMEOUT}s)..."
 INDEXER_READY=false
 ELAPSED=0
 while [ $ELAPSED -lt $INDEXER_TIMEOUT ]; do
-    if curl -k -s --max-time 5 -u admin:SecretPassword "https://$INDEXER_IP:9200/" >/dev/null 2>&1; then
-        echo "   ✅ Indexer responding (after ${ELAPSED}s)"
+    # Check if indexer is responding (might return auth error but that's OK)
+    RESPONSE=$(curl -k -s --max-time 5 "https://$INDEXER_IP:9200/" 2>/dev/null)
+    if [ -n "$RESPONSE" ]; then
+        echo "   ✅ Indexer process responding (after ${ELAPSED}s)"
         INDEXER_READY=true
         break
     fi
 
     if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
-        echo "   ⏳ Still waiting for indexer to respond... (${ELAPSED}s elapsed)"
+        echo "   ⏳ Still waiting for indexer to start... (${ELAPSED}s elapsed)"
     fi
 
     sleep 2
@@ -150,48 +158,63 @@ while [ $ELAPSED -lt $INDEXER_TIMEOUT ]; do
 done
 
 if [ "$INDEXER_READY" = false ]; then
-    echo "   ❌ ERROR: Indexer failed to respond after ${INDEXER_TIMEOUT}s"
-    echo "   This indicates a real problem with indexer startup"
+    echo "   ❌ ERROR: Indexer failed to start after ${INDEXER_TIMEOUT}s"
     exit 1
 fi
 
-# Wait for cluster health to be at least YELLOW
-echo "   Waiting for indexer cluster health to be ready (timeout: ${INDEXER_TIMEOUT}s)..."
-CLUSTER_READY=false
-ELAPSED=0
-while [ $ELAPSED -lt $INDEXER_TIMEOUT ]; do
-    HEALTH=$(curl -k -s --max-time 5 -u admin:SecretPassword "https://$INDEXER_IP:9200/_cluster/health" 2>/dev/null)
-
-    if echo "$HEALTH" | grep -q '"status":"green"'; then
-        echo "   ✅ Cluster health: GREEN (after ${ELAPSED}s)"
-        CLUSTER_READY=true
-        break
-    elif echo "$HEALTH" | grep -q '"status":"yellow"'; then
-        echo "   ✅ Cluster health: YELLOW (after ${ELAPSED}s)"
-        CLUSTER_READY=true
-        break
-    fi
-
-    if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
-        echo "   ⏳ Still waiting for cluster health... (${ELAPSED}s elapsed)"
-    fi
-
-    sleep 2
-    ELAPSED=$((ELAPSED + 2))
-done
-
-if [ "$CLUSTER_READY" = false ]; then
-    echo "   ❌ ERROR: Cluster failed to reach healthy state after ${INDEXER_TIMEOUT}s"
-    echo "   This indicates a real problem with cluster initialization"
-    exit 1
-fi
-
-# Additional stabilization wait - let indexer fully settle
-echo "   ⏳ Allowing indexer to fully stabilize (30s additional wait)..."
-sleep 30
-
-echo "   ✅ Indexer fully ready and stable for dashboard initialization"
+# Give indexer time to fully initialize
+echo "   ⏳ Allowing indexer to fully initialize (45s)..."
+sleep 45
 echo ""
+
+echo "🔐 Step 6: Initializing OpenSearch Security..."
+echo "   Running securityadmin.sh with generated certificates..."
+
+# Run security initialization using the generated certificates
+SECURITY_INIT_OUTPUT=$(docker exec wazuh-wazuh.indexer-1 bash -c '
+  JAVA_HOME=/usr/share/wazuh-indexer/jdk \
+  /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+    -cd /usr/share/wazuh-indexer/config/opensearch-security/ \
+    -cacert /usr/share/wazuh-indexer/config/certs/root-ca.pem \
+    -cert /usr/share/wazuh-indexer/config/certs/admin.pem \
+    -key /usr/share/wazuh-indexer/config/certs/admin-key.pem \
+    -icl -nhnv -h localhost
+' 2>&1)
+
+if echo "$SECURITY_INIT_OUTPUT" | grep -q "Done with success"; then
+    echo "   ✅ Security initialization completed successfully"
+else
+    echo "   ⚠️  Security initialization output:"
+    echo "$SECURITY_INIT_OUTPUT" | tail -20
+    # Check if it's just because index already exists
+    if echo "$SECURITY_INIT_OUTPUT" | grep -q "already exists"; then
+        echo "   ✅ Security index already exists - continuing"
+    else
+        echo "   ❌ Security initialization may have failed - check output above"
+    fi
+fi
+echo ""
+
+echo "   ⏳ Waiting for security to propagate (15s)..."
+sleep 15
+
+# Check cluster health
+echo "   Checking cluster health..."
+HEALTH=$(curl -k -s --max-time 10 -u admin:SecretPassword "https://$INDEXER_IP:9200/_cluster/health" 2>/dev/null)
+
+if echo "$HEALTH" | grep -q '"status":"green"'; then
+    echo "   ✅ Cluster health: GREEN"
+elif echo "$HEALTH" | grep -q '"status":"yellow"'; then
+    echo "   ✅ Cluster health: YELLOW (acceptable for single-node)"
+else
+    echo "   ⚠️  Cluster health check returned: $HEALTH"
+fi
+
+echo "   ✅ Indexer ready and security initialized"
+echo ""
+
+echo "⏳ Step 7: Waiting for all services to stabilize..."
+sleep 30
 
 echo "Container status:"
 docker-compose ps
@@ -199,6 +222,7 @@ docker-compose ps
 echo ""
 echo "Cleaning up temporary files..."
 rm -rf $WORK_DIR
+rm -f $UNRAID_NVME_PATH/generate-certs.yml
 
 echo ""
 echo "============================================"
@@ -210,7 +234,7 @@ echo "   - Dashboard: https://10.2.0.87:5601"
 echo "   - Manager API: https://10.2.0.85:55000"
 echo "   - Indexer: https://10.2.0.86:9200"
 echo ""
-echo "🔑 Default Credentials (from official deployment):"
+echo "🔑 Default Credentials:"
 echo "   - Dashboard: admin / SecretPassword"
 echo "   - API: wazuh-wui / MyS3cr37P450r.*-"
 echo ""

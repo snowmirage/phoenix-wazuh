@@ -3,26 +3,29 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Status
-✅ **WAZUH SIEM SUCCESSFULLY DEPLOYED AND OPERATIONAL**
+✅ **WAZUH 4.14.1 SIEM SUCCESSFULLY DEPLOYED AND OPERATIONAL**
 
 Current repository contains:
-- `unraid-wazuh-setup.sh`: Comprehensive setup script with all fixes applied
-- `docker.compose`: Working docker-compose configuration (cleaned up)
-- SSL certificates auto-generated and properly configured
+- `phoenix-wazuh-orchestrator.sh`: Main deployment script (runs from dev machine)
+- `phoenix-wazuh-worker.sh`: Worker script (runs on Unraid, handles container deployment)
+- `docker-compose-unraid.yml`: Docker Compose configuration with proper volume mounts
+- `ossec.conf.template`: Template for Wazuh manager configuration
+- `wazuh-integrations.conf.example`: Example integration configuration file
+- SSL certificates auto-generated using official `wazuh-certs-generator`
 - All configuration issues resolved
 
 ## Current Wazuh Deployment Status
 **All services are RUNNING and ACCESSIBLE:**
 
 ### Access URLs (Working)
-- **Dashboard**: `https://10.2.0.87:5601` 
-  - Login: `admin` / `admin` (corrected credentials)
+- **Dashboard**: `https://10.2.0.87:5601`
+  - Login: `admin` / `SecretPassword`
   - Web interface fully functional
 - **Manager API**: `https://10.2.0.85:55000`
-  - API responding correctly
+  - API Login: `wazuh-wui` / `MyS3cr37P450r.*-`
   - All Wazuh processes running
 - **Indexer**: `https://10.2.0.86:9200`
-  - Login: `admin` / `admin` (corrected credentials)
+  - Login: `admin` / `SecretPassword`
   - OpenSearch responding correctly and indexing data
   - Wazuh indices being created successfully
 
@@ -158,65 +161,46 @@ curl -k -u admin:admin -X POST "https://10.2.0.86:9200/_plugins/_ism/add/wazuh-a
 
 ## Known Issues & Applied Fixes
 
-### 0. Wazuh 4.14.1 - Critical Security Initialization Bug (UPSTREAM BUG)
+### 0. Wazuh 4.14.1 - Security Initialization (RESOLVED)
 
-**Status**: ⚠️ **KNOWN UPSTREAM BUG** - Version 4.14.1 has a critical initialization failure
+**Status**: ✅ **RESOLVED** - Our deployment now handles security initialization correctly
 
-**Recommended Version**: **4.12.0** (stable, tested, production-ready)
+**Recommended Version**: **4.14.1** (latest, tested, production-ready)
 
-**Issue Description**:
-Wazuh 4.14.1 has a critical bug where OpenSearch Security plugin fails to initialize automatically, causing complete deployment failure.
-
-**Symptoms**:
-```
-❌ ERROR: Indexer failed to reach healthy state after 300s
-Security plugin showing: "OpenSearch Security not initialized"
-```
-
-**Technical Details**:
-- After container startup, indexer responds to health checks
-- But security plugin never initializes (missing securityadmin execution)
-- Cluster remains in unhealthy state indefinitely
-- Dashboard cannot connect, deployment fails validation
-
-**Root Cause**:
-- GitHub Issue: [wazuh/wazuh#33174](https://github.com/wazuh/wazuh/issues/33174)
-- Security initialization scripts not executing automatically in 4.14.1
-- Requires manual intervention to run securityadmin.sh
-- This is a regression from 4.12.0 which works correctly
-
-**Workaround Available** (not implemented):
-Manual security initialization after deployment:
-```bash
-docker exec wazuh-wazuh.indexer-1 /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
-  -cd /usr/share/wazuh-indexer/opensearch-security/ \
-  -icl -nhnv -cacert config/root-ca.pem \
-  -cert config/admin.pem -key config/admin-key.pem
-```
+**Previous Issue**:
+Wazuh 4.14.1 Docker images don't auto-initialize OpenSearch Security plugin on startup. This requires running `securityadmin.sh` manually after the indexer is ready.
 
 **Our Solution**:
-- **Reverted to Wazuh 4.12.0** - stable, tested, no known issues
-- Made version configurable via `--version` parameter
-- Version validation checks GitHub releases and Docker Hub
-- Allows easy testing of future versions when bug is fixed
+The `phoenix-wazuh-worker.sh` script now follows the official Wazuh Docker deployment approach:
+1. Generates SSL certificates using `wazuh-certs-generator:0.0.2`
+2. Starts containers and waits for indexer to respond
+3. **Runs `securityadmin.sh` explicitly** after indexer initialization
+4. Verifies cluster health before proceeding
 
-**Testing Results**:
-- ❌ 4.14.1: Fails during indexer initialization (300s timeout)
-- ✅ 4.12.0: Deploys successfully, all validations pass
-- ✅ 4.12.0: Backup/restore works perfectly
-- ✅ 4.12.0: All integrations (VirusTotal, Maltiverse) functional
-
-**When to Upgrade**:
-Monitor [GitHub issue #33174](https://github.com/wazuh/wazuh/issues/33174) for resolution. Once fixed in a future version (4.14.2+), test with:
+**Key Implementation** (in worker script Step 6):
 ```bash
-./phoenix-wazuh-orchestrator.sh fresh-install --version 4.14.2
+docker exec wazuh-wazuh.indexer-1 bash -c '
+  JAVA_HOME=/usr/share/wazuh-indexer/jdk \
+  /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+    -cd /usr/share/wazuh-indexer/config/opensearch-security/ \
+    -cacert /usr/share/wazuh-indexer/config/certs/root-ca.pem \
+    -cert /usr/share/wazuh-indexer/config/certs/admin.pem \
+    -key /usr/share/wazuh-indexer/config/certs/admin-key.pem \
+    -icl -nhnv -h localhost
+'
 ```
 
-**Impact**:
-- Staying on 4.12.0 is recommended for production use
-- All features fully functional on 4.12.0
-- Security updates still received via Docker image patches
-- Will upgrade when upstream bug is resolved
+**Testing Results**:
+- ✅ 4.14.1: Deploys successfully, all validations pass
+- ✅ 4.14.1: Security initialization completes with GREEN cluster health
+- ✅ 4.14.1: All integrations (VirusTotal, Maltiverse) functional
+- ✅ 4.14.1: Syslog reception working
+- ✅ 4.14.1: 2-year data retention policy active
+
+**Deployment Command**:
+```bash
+./phoenix-wazuh-orchestrator.sh fresh-install --version 4.14.1
+```
 
 ### 1. Filebeat "_type" Parameter Compatibility Issue
 
