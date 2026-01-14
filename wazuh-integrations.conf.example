@@ -1,0 +1,76 @@
+# Wazuh Integrations Configuration File
+# This file contains API keys and configuration for various security integrations
+#
+# Usage: The phoenix-wazuh-orchestrator.sh script will automatically read this file
+# Location: Place this file in the same directory as the deployment script
+#
+# Setup Instructions:
+# 1. Copy this file: cp wazuh-integrations.conf.example wazuh-integrations.conf
+# 2. Edit wazuh-integrations.conf with your API keys
+# 3. Secure the file: chmod 600 wazuh-integrations.conf
+#
+# Security Note: This file contains sensitive API keys.
+# - Keep this file secure and do not commit to version control
+# - Set appropriate file permissions (chmod 600)
+
+# ==========================================
+# VirusTotal Integration
+# ==========================================
+# Get your API key from: https://www.virustotal.com/gui/my-apikey
+# Free tier: 1000 requests/day, 4 requests/minute
+# Premium tiers available for higher limits
+#
+# Leave empty or comment out to disable VirusTotal integration
+VIRUSTOTAL_API_KEY=""
+
+# ==========================================
+# Maltiverse Integration
+# ==========================================
+# Get your API key from: https://whatis.maltiverse.com/ (user profile)
+# Sign up for free community plan at: https://whatis.maltiverse.com/
+# Provides: Threat intelligence for IP addresses, hostnames, URLs, and file hashes
+# Data Source: Real-time IOCs and malicious indicators database
+# Requires: Wazuh 4.7.0+ (native integration, no external libraries needed)
+#
+# Leave empty or comment out to disable Maltiverse integration
+MALTIVERSE_API_KEY=""
+
+# ==========================================
+# Future Integrations (Placeholders)
+# ==========================================
+# These will be implemented in future updates
+
+# Slack Integration (for notifications)
+# SLACK_WEBHOOK_URL=""
+
+# PagerDuty Integration (for incident management)
+# PAGERDUTY_INTEGRATION_KEY=""
+
+# TheHive Integration (for case management)
+# THEHIVE_URL=""
+# THEHIVE_API_KEY=""
+
+# MISP Integration (for threat intelligence)
+# MISP_URL=""
+# MISP_API_KEY=""
+
+# Suricata Integration (for network IDS)
+# SURICATA_ENABLED="false"
+
+# ==========================================
+# Advanced Configuration
+# ==========================================
+# Custom settings for fine-tuning integrations
+
+# VirusTotal Advanced Settings
+# VT_ALERT_LEVEL="5"                    # Minimum alert level to trigger VT scan
+# VT_MAX_FILE_SIZE="50MB"               # Maximum file size to scan
+# VT_SCAN_TIMEOUT="300"                 # Timeout for API calls (seconds)
+
+# Integration Rate Limiting
+# GLOBAL_RATE_LIMIT_ENABLED="true"      # Enable global rate limiting
+# MAX_API_CALLS_PER_MINUTE="10"         # Maximum API calls across all integrations
+
+# Notification Settings
+# EMAIL_NOTIFICATIONS="false"           # Enable email notifications for integration failures
+# NOTIFICATION_EMAIL=""                 # Email address for notifications

@@ -1,0 +1,39 @@
+# Wazuh Integration Configuration
+# Contains sensitive API keys - never commit
+wazuh-integrations.conf
+
+# Local/personal files (not for repo)
+CLAUDE.local.md
+wazuh-4.14.1-deployment-issues.md
+wishlist.txt
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+
+# Backup files
+*.backup
+*.bak
+
+# Temporary files
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# SSL certificates and keys (if generated locally)
+*.pem
+*.key
+*.crt
+*.csr
