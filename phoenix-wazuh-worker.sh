@@ -220,6 +220,12 @@ echo "Container status:"
 docker-compose ps
 
 echo ""
+echo "🔧 Step 8: Fixing dashboard config permissions..."
+docker exec -u root wazuh-wazuh.dashboard-1 chown -R wazuh-dashboard:wazuh-dashboard /usr/share/wazuh-dashboard/data/wazuh/config/ 2>/dev/null && \
+    echo "   ✅ Dashboard config permissions fixed" || \
+    echo "   ⚠️  Could not fix dashboard permissions (non-critical)"
+
+echo ""
 echo "Cleaning up temporary files..."
 rm -rf $WORK_DIR
 rm -f $UNRAID_NVME_PATH/generate-certs.yml
